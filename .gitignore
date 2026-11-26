@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Local user configuration & shortcuts (do not commit personal paths)
+config.yaml
+*.lnk
+*.log
+*.log.1
+state.json

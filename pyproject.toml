@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "startup-terminal"
+version = "1.1.0"
+description = "PM2-style desktop GUI server & background job manager for Windows with realtime logs and auto-updates"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6>=6.6.0",
+    "psutil>=5.9.0",
+    "PyYAML>=6.0",
+]
+
+[project.gui-scripts]
+startup-terminal = "main:main"
+
+[project.scripts]
+startup-terminal-cli = "main:main"
+
+[tool.setuptools]
+py-modules = [
+    "main",
+    "autostart",
+    "config_manager",
+    "process_manager",
+    "service_runner",
+    "settings_manager",
+    "updater",
+    "version",
+]
+
+[tool.setuptools.packages.find]
+include = ["ui*", "sample_servers*"]
