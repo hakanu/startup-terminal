@@ -155,6 +155,9 @@ class ServiceDialog(QDialog):
 
     def _populate_fields(self):
         if not self.is_edit_mode:
+            idx = self.shell_combo.findData(self.service_data.get("shell", "cmd"))
+            if idx >= 0:
+                self.shell_combo.setCurrentIndex(idx)
             return
 
         self.name_edit.setText(self.service_data.get("name", ""))
