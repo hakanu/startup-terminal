@@ -381,6 +381,7 @@ class MainWindow(QMainWindow):
     def _on_updater_restart_requested(self):
         """Detaches all running services so they stay alive while the updater swaps & relaunches the app."""
         self._save_window_geometry()
+        self.close_instance_server()
         self.tray_icon.hide()
         self.proc_mgr.detach_all()
         QApplication.quit()
@@ -528,9 +529,20 @@ class MainWindow(QMainWindow):
             self._restore_from_tray()
 
     def _restore_from_tray(self):
+        if self.isMinimized():
+            self.showNormal()
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def close_instance_server(self):
+        srv = getattr(self, "_instance_server", None)
+        if srv is not None:
+            try:
+                srv.close()
+            except Exception:
+                pass
+            self._instance_server = None
 
     def _force_quit(self):
         """Stops all processes synchronously and exits cleanly."""
@@ -542,6 +554,7 @@ class MainWindow(QMainWindow):
     def _restart_app(self):
         """Launches a fresh app process and exits, leaving managed services running."""
         self._save_window_geometry()
+        self.close_instance_server()
         self.tray_icon.hide()
         self.proc_mgr.detach_all()
 

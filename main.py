@@ -192,6 +192,7 @@ def main():
     autostart.refresh_autostart_if_enabled(start_minimized=settings.data.autostart_minimized)
 
     from PySide6.QtCore import Qt
+    from PySide6.QtNetwork import QLocalServer, QLocalSocket
     from PySide6.QtWidgets import QApplication
 
     from config_manager import get_resolved_config_path
@@ -206,6 +207,20 @@ def main():
     app.setApplicationName("StartupTerminal")
     app.setApplicationDisplayName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
+
+    # Single-instance guard: if already running (e.g. minimized in tray),
+    # tell the existing instance to restore & focus its window, then exit cleanly.
+    SINGLE_INSTANCE_KEY = "StartupTerminal_SingleInstance_v1"
+    probe = QLocalSocket()
+    probe.connectToServer(SINGLE_INSTANCE_KEY)
+    if probe.waitForConnected(350):
+        payload = b"PING" if (args.startup or args.minimized) else b"SHOW"
+        probe.write(payload)
+        probe.flush()
+        probe.waitForBytesWritten(350)
+        probe.disconnectFromServer()
+        sys.exit(0)
+
     app.setStyleSheet(DARK_THEME_QSS)
 
     config_path = Path(args.config) if args.config else get_resolved_config_path()
@@ -213,6 +228,26 @@ def main():
 
     window = MainWindow(config_path=config_path, start_minimized=start_minimized)
 
+    # Listen for secondary launches so Start Menu clicks restore the tray window
+    QLocalServer.removeServer(SINGLE_INSTANCE_KEY)
+    instance_server = QLocalServer(window)
+    if instance_server.listen(SINGLE_INSTANCE_KEY):
+        window._instance_server = instance_server
+
+        def _on_secondary_launch():
+            while instance_server.hasPendingConnections():
+                sock = instance_server.nextPendingConnection()
+                if sock:
+                    sock.waitForReadyRead(200)
+                    msg = bytes(sock.readAll()).strip()
+                    sock.disconnectFromServer()
+                    sock.deleteLater()
+                    if msg != b"PING":
+                        window._restore_from_tray()
+
+        instance_server.newConnection.connect(_on_secondary_launch)
+
+    app.aboutToQuit.connect(window.close_instance_server)
     app.aboutToQuit.connect(lambda: window.proc_mgr.stop_all(wait=True, timeout=2.5))
     atexit.register(lambda: window.proc_mgr.stop_all(wait=True, timeout=2.5))
 

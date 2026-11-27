@@ -4,7 +4,7 @@ from __future__ import annotations
 
 APP_NAME = "Startup Terminal"
 APP_SLUG = "startup-terminal"
-APP_VERSION = "1.1.4"
+APP_VERSION = "1.1.5"
 GITHUB_OWNER = "hakanu"
 GITHUB_REPO = "startup-terminal"
 GITHUB_SLUG = f"{GITHUB_OWNER}/{GITHUB_REPO}"

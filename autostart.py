@@ -67,12 +67,14 @@ def resolve_windows_gui_target() -> Tuple[str, str, str]:
 
 
 def _resolve_icon_path() -> str:
+    # Frozen Windows .exe already has startup_terminal.ico embedded permanently;
+    # never point a shortcut to sys._MEIPASS because that temp dir is deleted on exit.
+    if getattr(sys, "frozen", False) and sys.platform == "win32":
+        return os.path.abspath(sys.executable)
     base_dir = getattr(sys, "_MEIPASS", str(Path(__file__).resolve().parent))
     ico = os.path.join(base_dir, "assets", "startup_terminal.ico")
     if os.path.isfile(ico):
         return ico
-    if getattr(sys, "frozen", False):
-        return os.path.abspath(sys.executable)
     return ico
 
 

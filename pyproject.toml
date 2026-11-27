@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "startup-terminal"
-version = "1.1.4"
+version = "1.1.5"
 description = "PM2-style desktop GUI server & background job manager for Windows with realtime logs and auto-updates"
 readme = "README.md"
 requires-python = ">=3.10"
