@@ -37,6 +37,12 @@ from ui.wrap_button import WrapButton
 from version import APP_VERSION
 
 
+def _format_mem(mb: float) -> str:
+    if mb >= 1024.0:
+        return f"{mb / 1024.0:.1f} GB"
+    return f"{int(round(mb))} MB"
+
+
 class ServiceCard(QFrame):
     """Clickable card representing a service in the sidebar."""
 
@@ -105,8 +111,31 @@ class ServiceCard(QFrame):
         bot_row.addWidget(self.info_label)
         self.layout.addLayout(bot_row)
 
+        # Resource metrics row (RAM, VRAM, CPU) - shown while running
+        self.metrics_label = QLabel("")
+        self.metrics_label.setTextFormat(Qt.RichText)
+        self.metrics_label.setWordWrap(True)
+        self.metrics_label.setStyleSheet("font-size: 11px; color: #94a3b8; border: none; background: transparent;")
+        self.metrics_label.setVisible(False)
+        self.layout.addWidget(self.metrics_label)
+
         self.update_state(svc.state, svc.pid)
+        if svc.state == ServiceState.RUNNING:
+            self.update_metrics(svc.cpu_percent, svc.memory_mb, svc.vram_mb)
         self._update_style()
+
+    def update_metrics(self, cpu_percent: float, memory_mb: float, vram_mb: float = 0.0):
+        """Updates the live RAM / VRAM / CPU resource row on the card."""
+        if self.current_state != ServiceState.RUNNING:
+            self.metrics_label.setVisible(False)
+            return
+
+        parts = [f"<span style='color:#38bdf8;'>RAM {_format_mem(memory_mb)}</span>"]
+        if vram_mb >= 1.0:
+            parts.append(f"<span style='color:#c084fc; font-weight:600;'>VRAM {_format_mem(vram_mb)}</span>")
+        parts.append(f"<span style='color:#94a3b8;'>CPU {cpu_percent:.0f}%</span>")
+        self.metrics_label.setText(" &nbsp;•&nbsp; ".join(parts))
+        self.metrics_label.setVisible(True)
 
     def update_state(self, state: str, pid: Optional[int] = None):
         self.current_state = state
@@ -124,6 +153,7 @@ class ServiceCard(QFrame):
                 "QPushButton { background: #1e2230; color: #64748b; border: none; border-radius: 4px; padding: 0; }"
             )
             self.info_label.setText("Disabled")
+            self.metrics_label.setVisible(False)
             self._update_style()
             return
 
@@ -169,6 +199,10 @@ class ServiceCard(QFrame):
                 "QPushButton:hover { background: #047857; }"
             )
             self.info_label.setText("Stopped")
+            self.metrics_label.setVisible(False)
+
+        if state != ServiceState.RUNNING:
+            self.metrics_label.setVisible(False)
 
         self._update_style()
 
@@ -295,6 +329,7 @@ class SidebarWidget(QWidget):
 
         # Active Summary Bar
         self.summary_label = QLabel("0 active • 0 stopped")
+        self.summary_label.setWordWrap(True)
         self.summary_label.setStyleSheet("color: #94a3b8; font-size: 11px; padding-left: 2px; border: none;")
         main_layout.addWidget(self.summary_label)
 
@@ -443,13 +478,25 @@ class SidebarWidget(QWidget):
         if svc_id in self.cards:
             self.cards[svc_id].update_state(state, pid)
 
+    def update_service_metrics(self, svc_id: str, cpu_percent: float, memory_mb: float, vram_mb: float = 0.0):
+        if svc_id in self.cards:
+            self.cards[svc_id].update_metrics(cpu_percent, memory_mb, vram_mb)
+
     def update_summary(self, services: Dict[str, ManagedService]):
-        active = sum(1 for s in services.values() if s.state == ServiceState.RUNNING)
+        active_svcs = [s for s in services.values() if s.state == ServiceState.RUNNING]
+        active = len(active_svcs)
         disabled = sum(1 for s in services.values() if not s.enabled and s.state != ServiceState.RUNNING)
         stopped = len(services) - active - disabled
         text = f"{active} active • {stopped} stopped"
         if disabled:
             text += f" • {disabled} disabled"
+        if active_svcs:
+            total_ram = sum(s.memory_mb for s in active_svcs)
+            total_vram = sum(s.vram_mb for s in active_svcs)
+            res_parts = [f"RAM {_format_mem(total_ram)}"]
+            if total_vram >= 1.0:
+                res_parts.append(f"VRAM {_format_mem(total_vram)}")
+            text += "\n" + " • ".join(res_parts)
         self.summary_label.setText(text)
 
     def select_service(self, svc_id: str):

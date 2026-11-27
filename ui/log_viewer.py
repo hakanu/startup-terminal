@@ -290,10 +290,14 @@ class LogViewerWidget(QWidget):
 
         self._update_uptime_display()
 
-    def update_metrics(self, cpu_percent: float, memory_mb: float):
+    def update_metrics(self, cpu_percent: float, memory_mb: float, vram_mb: float = 0.0):
         if not self.current_service or self.current_service.state != ServiceState.RUNNING:
             return
         self._update_uptime_display()
+
+    @staticmethod
+    def _fmt_mem(mb: float) -> str:
+        return f"{mb / 1024.0:.1f} GB" if mb >= 1024.0 else f"{int(round(mb))} MB"
 
     def _update_uptime_display(self):
         if not self.current_service:
@@ -309,7 +313,9 @@ class LogViewerWidget(QWidget):
             uptime_str = f"{hours:02}:{mins:02}:{secs:02}"
             pid_str = f"PID: {svc.pid}" if svc.pid else ""
             restarts_str = f"↺ {svc.restart_count}"
-            metrics_str = f"CPU: {svc.cpu_percent}%  RAM: {svc.memory_mb} MB"
+            metrics_str = f"CPU: {svc.cpu_percent}%  RAM: {self._fmt_mem(svc.memory_mb)}"
+            if svc.vram_mb >= 1.0:
+                metrics_str += f"  VRAM: {self._fmt_mem(svc.vram_mb)}"
             self.meta_label.setText(f"⏱ {uptime_str}  •  {pid_str}  •  {metrics_str}  •  {restarts_str}")
         elif svc.state == ServiceState.FAILED and svc.exit_code is not None:
             self.meta_label.setText(f"Exited with code {svc.exit_code}  •  ↺ {svc.restart_count} restarts")

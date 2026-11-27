@@ -87,6 +87,7 @@ class ManagedService:
         # Stats
         self.cpu_percent: float = 0.0
         self.memory_mb: float = 0.0
+        self.vram_mb: float = 0.0
         self.restart_count: int = 0
         self.detected_port: Optional[int] = None
 
@@ -131,19 +132,106 @@ def _parse_log_line(line: str) -> Optional[LogEntry]:
     return LogEntry(timestamp=ts, text=parts[2], stream=parts[1])
 
 
+class _PdhVramSampler:
+    """Fast, zero-subprocess per-PID dedicated VRAM sampler via Windows PDH.
+
+    Works across NVIDIA, AMD, and Intel GPUs under WDDM where NVML often reports
+    NVML_VALUE_NOT_AVAILABLE for per-process memory.
+    """
+
+    def __init__(self):
+        self._available = False
+        self._pdh = None
+        self._query = None
+        self._counter = None
+        if sys.platform == "win32":
+            self._init_pdh()
+
+    def _init_pdh(self):
+        try:
+            import ctypes
+            import ctypes.wintypes as wt
+
+            pdh = ctypes.WinDLL("pdh.dll")
+            q = wt.HANDLE()
+            if pdh.PdhOpenQueryW(None, 0, ctypes.byref(q)) != 0:
+                return
+            c = wt.HANDLE()
+            if pdh.PdhAddEnglishCounterW(q, r"\GPU Process Memory(*)\Dedicated Usage", 0, ctypes.byref(c)) != 0:
+                pdh.PdhCloseQuery(q)
+                return
+            self._pdh = pdh
+            self._query = q
+            self._counter = c
+            self._available = True
+        except Exception:
+            self._available = False
+
+    def sample(self) -> Dict[int, float]:
+        """Returns {pid: dedicated_vram_mb} across all GPUs."""
+        if not self._available or self._pdh is None:
+            return {}
+        try:
+            import ctypes
+            import ctypes.wintypes as wt
+            import re
+
+            class PDH_FMT_COUNTERVALUE(ctypes.Structure):
+                _fields_ = [("CStatus", wt.DWORD), ("largeValue", ctypes.c_longlong)]
+
+            class PDH_FMT_COUNTERVALUE_ITEM_W(ctypes.Structure):
+                _fields_ = [("szName", wt.LPWSTR), ("FmtValue", PDH_FMT_COUNTERVALUE)]
+
+            if self._pdh.PdhCollectQueryData(self._query) != 0:
+                return {}
+
+            buf_size = wt.DWORD(0)
+            item_count = wt.DWORD(0)
+            PDH_FMT_LARGE = 0x00000400
+            self._pdh.PdhGetFormattedCounterArrayW(
+                self._counter, PDH_FMT_LARGE, ctypes.byref(buf_size), ctypes.byref(item_count), None
+            )
+            if buf_size.value == 0 or item_count.value == 0:
+                return {}
+
+            raw = (ctypes.c_byte * buf_size.value)()
+            ret = self._pdh.PdhGetFormattedCounterArrayW(
+                self._counter, PDH_FMT_LARGE, ctypes.byref(buf_size), ctypes.byref(item_count), raw
+            )
+            if ret != 0:
+                return {}
+
+            items = ctypes.cast(raw, ctypes.POINTER(PDH_FMT_COUNTERVALUE_ITEM_W))
+            pid_bytes: Dict[int, int] = {}
+            for i in range(item_count.value):
+                val = items[i].FmtValue.largeValue
+                if val <= 0:
+                    continue
+                name = items[i].szName or ""
+                m = re.search(r"pid_(\d+)_", name)
+                if m:
+                    pid = int(m.group(1))
+                    pid_bytes[pid] = pid_bytes.get(pid, 0) + val
+            return {pid: b / (1024.0 * 1024.0) for pid, b in pid_bytes.items()}
+        except Exception:
+            return {}
+
+
 class ProcessManager(QObject):
     """Coordinates lifecycle and logs of all managed services."""
 
     # Signals for UI updates
     status_changed = Signal(str, str)  # (service_id, new_status)
     log_received = Signal(str, object, str, str)  # (service_id, timestamp, text, stream)
-    stats_updated = Signal(str, float, float)  # (service_id, cpu_percent, memory_mb)
+    stats_updated = Signal(str, float, float, float)  # (service_id, cpu_percent, memory_mb, vram_mb)
 
     def __init__(self, base_dir: str):
         super().__init__()
         self.base_dir = base_dir
         self.services: Dict[str, ManagedService] = {}
         self.max_log_lines = 5000
+        self._vram_sampler = _PdhVramSampler()
+        self._proc_cache: Dict[int, psutil.Process] = {}
 
         # When True (app restarting), services are left running and exits are ignored
         self.detached = False
@@ -175,9 +263,9 @@ class ProcessManager(QObject):
         except (RuntimeError, AttributeError):
             pass
 
-    def _safe_emit_stats(self, svc_id: str, cpu: float, mem: float):
+    def _safe_emit_stats(self, svc_id: str, cpu: float, mem: float, vram: float = 0.0):
         try:
-            self.stats_updated.emit(svc_id, cpu, mem)
+            self.stats_updated.emit(svc_id, cpu, mem, vram)
         except (RuntimeError, AttributeError):
             pass
 
@@ -673,6 +761,7 @@ class ProcessManager(QObject):
         svc.pid = None
         svc.cpu_percent = 0.0
         svc.memory_mb = 0.0
+        svc.vram_mb = 0.0
         self._write_state_entry(svc.id, None)
 
         if svc.user_stopped or exit_code == 0:
@@ -763,30 +852,57 @@ class ProcessManager(QObject):
 
         svc.process = None
         svc.pid = None
+        svc.cpu_percent = 0.0
+        svc.memory_mb = 0.0
+        svc.vram_mb = 0.0
         svc.state = ServiceState.STOPPED
         self._write_state_entry(svc.id, None)
         self._safe_emit_status(svc.id, svc.state)
 
+    def _get_cached_process(self, pid: int) -> psutil.Process:
+        proc = self._proc_cache.get(pid)
+        if proc is None:
+            proc = psutil.Process(pid)
+            self._proc_cache[pid] = proc
+        return proc
+
     def _poll_service_stats(self):
-        """Periodically polls CPU and memory stats for active services."""
-        for svc_id, svc in self.services.items():
-            if svc.state == ServiceState.RUNNING and svc.pid:
-                try:
-                    p = psutil.Process(svc.pid)
-                    # Sum stats including children (e.g. uvicorn reload workers)
-                    cpu = p.cpu_percent(interval=None)
-                    mem = p.memory_info().rss / (1024 * 1024)
+        """Periodically polls CPU, RAM, and dedicated GPU VRAM stats for active services."""
+        running = [s for s in self.services.values() if s.state == ServiceState.RUNNING and s.pid]
+        if not running:
+            self._proc_cache.clear()
+            return
 
-                    for child in p.children(recursive=True):
-                        try:
-                            cpu += child.cpu_percent(interval=None)
-                            mem += child.memory_info().rss / (1024 * 1024)
-                        except (psutil.NoSuchProcess, psutil.AccessDenied):
-                            pass
+        vram_by_pid = self._vram_sampler.sample()
+        seen_pids = set()
 
-                    svc.cpu_percent = round(cpu, 1)
-                    svc.memory_mb = round(mem, 1)
-                    self._safe_emit_stats(svc.id, svc.cpu_percent, svc.memory_mb)
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    svc.cpu_percent = 0.0
-                    svc.memory_mb = 0.0
+        for svc in running:
+            try:
+                p = self._get_cached_process(svc.pid)
+                seen_pids.add(svc.pid)
+                cpu = p.cpu_percent(interval=None)
+                mem = p.memory_info().rss / (1024 * 1024)
+                vram = vram_by_pid.get(svc.pid, 0.0)
+
+                for child in p.children(recursive=True):
+                    try:
+                        cp = self._get_cached_process(child.pid)
+                        seen_pids.add(child.pid)
+                        cpu += cp.cpu_percent(interval=None)
+                        mem += cp.memory_info().rss / (1024 * 1024)
+                        vram += vram_by_pid.get(child.pid, 0.0)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        pass
+
+                svc.cpu_percent = round(cpu, 1)
+                svc.memory_mb = round(mem, 1)
+                svc.vram_mb = round(vram, 1)
+                self._safe_emit_stats(svc.id, svc.cpu_percent, svc.memory_mb, svc.vram_mb)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                svc.cpu_percent = 0.0
+                svc.memory_mb = 0.0
+                svc.vram_mb = 0.0
+
+        # Prune exited PIDs from cache
+        for dead_pid in [pid for pid in self._proc_cache if pid not in seen_pids]:
+            self._proc_cache.pop(dead_pid, None)

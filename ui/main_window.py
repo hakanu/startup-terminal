@@ -399,9 +399,11 @@ class MainWindow(QMainWindow):
         if self.sidebar.selected_svc_id == svc_id:
             self.log_viewer.append_log_entry(LogEntry(timestamp=timestamp, text=text, stream=stream))
 
-    def _on_proc_stats_updated(self, svc_id: str, cpu: float, mem: float):
+    def _on_proc_stats_updated(self, svc_id: str, cpu: float, mem: float, vram: float):
+        self.sidebar.update_service_metrics(svc_id, cpu, mem, vram)
+        self.sidebar.update_summary(self.proc_mgr.services)
         if self.sidebar.selected_svc_id == svc_id:
-            self.log_viewer.update_metrics(cpu, mem)
+            self.log_viewer.update_metrics(cpu, mem, vram)
 
     def _on_autostart_toggled(self, checked: bool):
         ok, msg = autostart.set_autostart(checked, start_minimized=self.settings.data.autostart_minimized)
