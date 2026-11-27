@@ -31,10 +31,15 @@ from PySide6.QtWidgets import (
 class ServiceDialog(QDialog):
     """Dialog to create or edit a server/job service."""
 
-    def __init__(self, service_data: Optional[Dict[str, Any]] = None, parent=None):
+    def __init__(
+        self,
+        service_data: Optional[Dict[str, Any]] = None,
+        default_shell: str = "cmd",
+        parent=None,
+    ):
         super().__init__(parent)
         self.is_edit_mode = service_data is not None
-        self.service_data = service_data or {}
+        self.service_data = service_data or {"shell": default_shell}
         self.setWindowTitle("Edit Service" if self.is_edit_mode else "➕ Add New Service")
         self.resize(680, 600)
         self._setup_ui()

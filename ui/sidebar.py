@@ -291,6 +291,7 @@ class SidebarWidget(QWidget):
         super().__init__(parent)
         self.cards: Dict[str, ServiceCard] = {}
         self.selected_svc_id: Optional[str] = None
+        self.show_metrics: bool = True
         self._setup_ui()
 
     def _setup_ui(self):
@@ -321,10 +322,22 @@ class SidebarWidget(QWidget):
             "border-radius: 4px; padding: 1px 6px; font-size: 10px; font-weight: 600;"
         )
 
+        self.header_settings_btn = QPushButton("⚙")
+        self.header_settings_btn.setFixedSize(26, 26)
+        self.header_settings_btn.setToolTip("Open Settings (General, Logs, Notifications & Updates)")
+        self.header_settings_btn.setCursor(QCursor(Qt.PointingHandCursor))
+        self.header_settings_btn.setStyleSheet(
+            "QPushButton { background-color: #1e2230; color: #cbd5e1; border: 1px solid #2d3345; "
+            "border-radius: 6px; padding: 0; font-size: 13px; }"
+            "QPushButton:hover { background-color: #282e42; color: #ffffff; border-color: #4f46e5; }"
+        )
+        self.header_settings_btn.clicked.connect(self.settings_requested.emit)
+
         header_layout.addWidget(logo_label)
         header_layout.addWidget(title_label)
         header_layout.addStretch()
         header_layout.addWidget(ver_label)
+        header_layout.addWidget(self.header_settings_btn)
         main_layout.addLayout(header_layout)
 
         # Active Summary Bar
@@ -480,7 +493,21 @@ class SidebarWidget(QWidget):
 
     def update_service_metrics(self, svc_id: str, cpu_percent: float, memory_mb: float, vram_mb: float = 0.0):
         if svc_id in self.cards:
-            self.cards[svc_id].update_metrics(cpu_percent, memory_mb, vram_mb)
+            if self.show_metrics:
+                self.cards[svc_id].update_metrics(cpu_percent, memory_mb, vram_mb)
+            else:
+                self.cards[svc_id].metrics_label.setVisible(False)
+
+    def set_show_metrics(self, show: bool, services: Optional[Dict[str, ManagedService]] = None):
+        self.show_metrics = bool(show)
+        for cid, card in self.cards.items():
+            if not self.show_metrics:
+                card.metrics_label.setVisible(False)
+            elif services and cid in services and services[cid].state == ServiceState.RUNNING:
+                s = services[cid]
+                card.update_metrics(s.cpu_percent, s.memory_mb, s.vram_mb)
+        if services is not None:
+            self.update_summary(services)
 
     def update_summary(self, services: Dict[str, ManagedService]):
         active_svcs = [s for s in services.values() if s.state == ServiceState.RUNNING]

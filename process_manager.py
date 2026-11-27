@@ -414,6 +414,19 @@ class ProcessManager(QObject):
             name=f"ServiceWatcher-{svc.id}",
         ).start()
 
+    def set_stats_poll_interval(self, interval_ms: int):
+        """Updates the live CPU/RAM/VRAM polling interval."""
+        self.stats_timer.setInterval(max(500, int(interval_ms)))
+
+    def set_max_log_lines(self, max_logs: int):
+        """Updates in-memory log buffer limit for all managed services."""
+        limit = max(500, int(max_logs))
+        self.max_log_lines = limit
+        for svc in self.services.values():
+            svc.max_logs = limit
+            if len(svc.logs) > limit:
+                svc.logs = svc.logs[-limit:]
+
     def detach_all(self):
         """Leaves all services running (for an app restart): no more kills, restarts or state writes."""
         for svc in self.services.values():

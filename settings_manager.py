@@ -1,8 +1,9 @@
 """Centralized persistent UI & application settings for Startup Terminal.
 
 Stores typed user preferences (window geometry, splitter state, UI scale,
-log viewer preferences, tray behavior, and GitHub Releases auto-update
-settings) in %APPDATA%/StartupTerminal/settings.json (or ~/.startup_terminal_settings.json).
+service defaults, log viewer preferences, crash notifications, tray behavior,
+and GitHub Releases auto-update settings) in %APPDATA%/StartupTerminal/settings.json
+(or ~/.startupterminal/settings.json).
 """
 
 from __future__ import annotations
@@ -38,11 +39,18 @@ class SettingsData:
     splitter_sizes: Optional[List[int]] = None
     ui_scale_percent: int = 100
 
-    # Services & Logs
+    # Services, Monitoring & Logs
     auto_start_all: bool = True
+    default_shell: str = "powershell"  # cmd | powershell | pwsh
+    stats_poll_interval_ms: int = 2000
+    show_sidebar_metrics: bool = True
     max_log_lines: int = 5000
     log_font_size: int = 10
     log_word_wrap: bool = False
+
+    # Notifications
+    notify_on_crash: bool = True
+    notify_on_minimize: bool = False
 
     # Auto-Update (GitHub Releases)
     auto_check_updates: bool = True
@@ -82,6 +90,13 @@ class AppSettings:
             os.replace(tmp_path, self.path)
         except Exception:
             pass
+
+    def reset_defaults(self, save: bool = True, notify: bool = True):
+        self.data = SettingsData()
+        if save:
+            self.save()
+        if notify:
+            self.notify_changed()
 
     def get(self, key: str, default: Any = None) -> Any:
         return getattr(self.data, key, default)

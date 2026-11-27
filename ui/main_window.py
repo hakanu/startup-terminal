@@ -34,10 +34,11 @@ from config_manager import (
     delete_service_from_config,
     get_resolved_config_path,
     load_config,
+    save_config_dict,
     set_service_enabled_in_config,
     update_service_in_config,
 )
-from process_manager import LogEntry, ProcessManager
+from process_manager import LogEntry, ProcessManager, ServiceState
 from settings_manager import get_settings
 from ui.config_dialog import ConfigDialog
 from ui.log_viewer import LogViewerWidget
@@ -307,12 +308,24 @@ class MainWindow(QMainWindow):
         self.update_mgr.update_available.connect(self._on_update_available)
         self.update_mgr.restart_requested.connect(self._on_updater_restart_requested)
 
-    def _apply_ui_settings(self):
+    def _apply_ui_settings(self, sync_yaml: bool = False):
         d = self.settings.data
         self.minimize_to_tray = d.close_to_tray
         self.auto_start_all = d.auto_start_all
         self.log_viewer.apply_settings(font_size=d.log_font_size, word_wrap=d.log_word_wrap)
+        self.proc_mgr.set_stats_poll_interval(d.stats_poll_interval_ms)
+        self.proc_mgr.set_max_log_lines(d.max_log_lines)
+        self.sidebar.set_show_metrics(d.show_sidebar_metrics, self.proc_mgr.services)
         self.sidebar.set_autostart_checked(autostart.is_autostart_registered())
+
+        if sync_yaml and getattr(self, "config_data", None) is not None:
+            yaml_settings = self.config_data.setdefault("settings", {})
+            yaml_settings["start_with_windows"] = autostart.is_autostart_registered()
+            yaml_settings["minimize_to_tray_on_close"] = d.close_to_tray
+            yaml_settings["start_minimized"] = d.start_minimized
+            yaml_settings["auto_start_all"] = d.auto_start_all
+            yaml_settings["max_log_lines"] = d.max_log_lines
+            save_config_dict(self.config_data, self.config_path)
 
     def _load_and_apply_config(self, initial_boot: bool = False):
         try:
@@ -373,8 +386,8 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def _open_settings_dialog(self):
-        dlg = SettingsDialog(update_mgr=self.update_mgr, parent=self)
-        dlg.settings_applied.connect(self._apply_ui_settings)
+        dlg = SettingsDialog(update_mgr=self.update_mgr, config_path=self.config_path, parent=self)
+        dlg.settings_applied.connect(lambda: self._apply_ui_settings(sync_yaml=True))
         dlg.exec()
 
     def _on_service_selected(self, svc_id: str):
@@ -394,6 +407,15 @@ class MainWindow(QMainWindow):
 
         if self.sidebar.selected_svc_id == svc_id and svc:
             self.log_viewer.update_status(state, pid)
+
+        if state == ServiceState.FAILED and svc and self.settings.data.notify_on_crash:
+            code = f" (exit code {svc.exit_code})" if svc.exit_code is not None else ""
+            self.tray_icon.showMessage(
+                f"{APP_NAME} — Service Crashed",
+                f"'{svc.name}' stopped unexpectedly{code}.",
+                QSystemTrayIcon.Warning,
+                3500,
+            )
 
     def _on_proc_log_received(self, svc_id: str, timestamp, text: str, stream: str):
         if self.sidebar.selected_svc_id == svc_id:
@@ -435,7 +457,7 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def _open_add_service_dialog(self):
-        dialog = ServiceDialog(parent=self)
+        dialog = ServiceDialog(default_shell=self.settings.data.default_shell, parent=self)
         if dialog.exec():
             svc_data = dialog.get_service_data()
             ok, err = add_service_to_config(svc_data, self.config_path)
@@ -564,12 +586,13 @@ class MainWindow(QMainWindow):
         if getattr(self, "minimize_to_tray", True):
             event.ignore()
             self.hide()
-            self.tray_icon.showMessage(
-                APP_NAME,
-                "App is running in the background. Click the tray icon to restore.",
-                QSystemTrayIcon.Information,
-                2000,
-            )
+            if self.settings.data.notify_on_minimize:
+                self.tray_icon.showMessage(
+                    APP_NAME,
+                    "App is running in the background. Click the tray icon to restore.",
+                    QSystemTrayIcon.Information,
+                    2000,
+                )
         else:
             self._force_quit()
             event.accept()
