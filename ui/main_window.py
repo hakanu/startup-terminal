@@ -421,7 +421,11 @@ class MainWindow(QMainWindow):
 
     def _open_config_external(self):
         try:
-            os.startfile(str(self.config_path))
+            if sys.platform == "win32":
+                os.startfile(str(self.config_path))
+            else:
+                opener = "open" if sys.platform == "darwin" else "xdg-open"
+                subprocess.Popen([opener, str(self.config_path)], start_new_session=True)
         except Exception as exc:
             QMessageBox.warning(self, "Error", f"Failed to open config file: {exc}")
 

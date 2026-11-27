@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -124,6 +125,8 @@ class ReleaseInfo:
     notes: str = ""
     win_asset_url: str = ""
     win_asset_name: str = ""
+    linux_asset_url: str = ""
+    linux_asset_name: str = ""
     wheel_asset_url: str = ""
     wheel_asset_name: str = ""
     checksums_url: str = ""
@@ -141,9 +144,13 @@ def is_newer_version(remote_ver: str, local_ver: str = APP_VERSION) -> bool:
 
 
 def get_install_mode() -> str:
-    """Returns 'frozen_win', 'uv_tool', or 'python'."""
+    """Returns 'frozen_win', 'frozen_linux', 'uv_tool', or 'python'."""
     if getattr(sys, "frozen", False):
-        return "frozen_win" if sys.platform == "win32" else "frozen_other"
+        if sys.platform == "win32":
+            return "frozen_win"
+        if sys.platform.startswith("linux"):
+            return "frozen_linux"
+        return "frozen_other"
     exe_lower = os.path.abspath(sys.executable).lower()
     if "uv" in exe_lower and "tools" in exe_lower:
         return "uv_tool"
@@ -169,6 +176,8 @@ def fetch_latest_release(timeout: float = 8.0) -> ReleaseInfo:
 
     win_url = ""
     win_name = ""
+    linux_url = ""
+    linux_name = ""
     whl_url = ""
     whl_name = ""
     sums_url = ""
@@ -189,6 +198,11 @@ def fetch_latest_release(timeout: float = 8.0) -> ReleaseInfo:
         elif low.endswith(".exe") and not win_url:
             win_url = dl
             win_name = name
+        elif "linux" in low:
+            # Prefer raw binary over .tar.gz if both exist
+            if not linux_url or not low.endswith(".tar.gz"):
+                linux_url = dl
+                linux_name = name
 
     return ReleaseInfo(
         version=version,
@@ -197,6 +211,8 @@ def fetch_latest_release(timeout: float = 8.0) -> ReleaseInfo:
         notes=notes,
         win_asset_url=win_url,
         win_asset_name=win_name,
+        linux_asset_url=linux_url,
+        linux_asset_name=linux_name,
         wheel_asset_url=whl_url,
         wheel_asset_name=whl_name,
         checksums_url=sums_url,
@@ -308,6 +324,8 @@ class UpdateManager(QObject):
             try:
                 if mode == "frozen_win" and rel.win_asset_url:
                     self._install_frozen_windows(rel)
+                elif mode == "frozen_linux" and rel.linux_asset_url:
+                    self._install_frozen_linux(rel)
                 else:
                     self._install_python_or_uv(rel)
             except Exception as exc:
@@ -407,6 +425,57 @@ Remove-Item -LiteralPath '{tmp_dir}' -Recurse -Force -ErrorAction SilentlyContin
             close_fds=True,
         )
         self.status_changed.emit(f"Installing v{rel.version} and restarting...")
+        time.sleep(0.3)
+        self.restart_requested.emit()
+
+    def _install_frozen_linux(self, rel: ReleaseInfo):
+        tmp_dir = tempfile.mkdtemp(prefix="startup_terminal_upd_")
+        dl_path = os.path.join(tmp_dir, rel.linux_asset_name)
+        self.status_changed.emit(f"Downloading v{rel.version}...")
+        _download_file(rel.linux_asset_url, dl_path, progress_cb=self.download_progress.emit)
+
+        if not _verify_sha256(dl_path, rel.linux_asset_name, rel.checksums_url):
+            raise RuntimeError("SHA256 checksum verification failed.")
+
+        new_bin = dl_path
+        if dl_path.lower().endswith(".tar.gz"):
+            extract_dir = os.path.join(tmp_dir, "extracted")
+            os.makedirs(extract_dir, exist_ok=True)
+            with tarfile.open(dl_path, "r:gz") as tf:
+                tf.extractall(extract_dir)
+            found = None
+            for root, _, files in os.walk(extract_dir):
+                for fn in files:
+                    if "startup-terminal" in fn.lower():
+                        found = os.path.join(root, fn)
+                        break
+                if found:
+                    break
+            if not found:
+                raise RuntimeError("No executable found inside downloaded Linux archive.")
+            new_bin = found
+
+        os.chmod(new_bin, 0o755)
+        current_exe = os.path.abspath(sys.executable)
+        current_dir = os.path.dirname(current_exe)
+        staged = os.path.join(current_dir, f".{os.path.basename(current_exe)}.new")
+        shutil.copy2(new_bin, staged)
+        os.chmod(staged, 0o755)
+        os.replace(staged, current_exe)  # Atomic replace on POSIX even while running
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        clean_env = {
+            k: v for k, v in os.environ.items()
+            if not k.startswith("_PYI_") and not k.startswith("_MEIPASS")
+        }
+        subprocess.Popen(
+            [current_exe],
+            cwd=current_dir,
+            env=clean_env,
+            start_new_session=True,
+            close_fds=True,
+        )
+        self.status_changed.emit(f"Updated to v{rel.version}! Restarting...")
         time.sleep(0.3)
         self.restart_requested.emit()
 

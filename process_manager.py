@@ -629,8 +629,14 @@ class ProcessManager(QObject):
         Single-line cmd commands run directly through cmd.exe as before. PowerShell
         commands and multi-line cmd commands are written to a script file so that
         variables, pipes and line continuations behave exactly like in a terminal.
+        On Linux/macOS, runs via bash/sh.
         """
         command = svc.command.strip()
+        if sys.platform != "win32":
+            if svc.shell == "pwsh":
+                return ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], False
+            return ["/bin/bash", "-c", command], False
+
         if svc.shell == "cmd" and "\n" not in command:
             return command, True
 

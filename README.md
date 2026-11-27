@@ -34,7 +34,18 @@ Invoke-WebRequest "https://github.com/hakanu/startup-terminal/releases/latest/do
 Start-Process "$dir\startup-terminal.exe"
 ```
 
-### Python / `uv tool` (Developers)
+### Linux (x64) — Standalone Binary (no Python required)
+
+```bash
+mkdir -p ~/.local/bin
+curl -fsSL "https://github.com/hakanu/startup-terminal/releases/latest/download/startup-terminal-linux-x64" -o ~/.local/bin/startup-terminal
+chmod +x ~/.local/bin/startup-terminal
+~/.local/bin/startup-terminal --install-shortcut
+~/.local/bin/startup-terminal --autostart
+~/.local/bin/startup-terminal &
+```
+
+### Python / `uv tool` (Windows & Linux)
 
 ```bash
 uv tool install git+https://github.com/hakanu/startup-terminal.git

@@ -146,6 +146,7 @@ class SettingsDialog(QDialog):
         info_form.setSpacing(6)
         mode_label = {
             "frozen_win": "Standalone Windows GUI (.exe)",
+            "frozen_linux": "Standalone Linux x64 Binary",
             "uv_tool": "uv tool install",
             "python": "Python source / pip",
         }.get(get_install_mode(), get_install_mode())

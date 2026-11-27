@@ -88,9 +88,9 @@ def get_target_command_string(start_minimized: bool = True) -> str:
 
 
 def is_autostart_registered() -> bool:
-    """Checks if Startup Terminal is registered in HKCU Run key."""
+    """Checks if Startup Terminal is registered for automatic login startup."""
     if sys.platform != "win32" or winreg is None:
-        return False
+        return os.path.isfile(os.path.expanduser("~/.config/autostart/startup-terminal.desktop"))
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, REG_RUN_KEY_PATH, 0, winreg.KEY_READ) as key:
             val, _ = winreg.QueryValueEx(key, REG_VALUE_NAME)
@@ -115,10 +115,46 @@ def get_current_registered_command() -> Optional[str]:
         return None
 
 
+def _resolve_linux_exec(extra_args: str = "") -> str:
+    if getattr(sys, "frozen", False):
+        cmd = f'"{os.path.abspath(sys.executable)}"'
+    else:
+        which_bin = shutil.which("startup-terminal")
+        cmd = which_bin if which_bin else f'"{sys.executable}" "{get_app_entrypoint()}"'
+    return f"{cmd} {extra_args}".strip()
+
+
+def _linux_desktop_entry(extra_args: str = "", autostart_entry: bool = False) -> str:
+    base_dir = getattr(sys, "_MEIPASS", str(Path(__file__).resolve().parent))
+    icon = os.path.join(base_dir, "assets", "startup_terminal.png")
+    lines = [
+        "[Desktop Entry]",
+        "Type=Application",
+        "Name=Startup Terminal",
+        "Comment=PM2-Style Server & Background Job Manager",
+        f"Exec={_resolve_linux_exec(extra_args)}",
+        f"Icon={icon}",
+        "Terminal=false",
+        "Categories=Development;System;Utility;",
+    ]
+    if autostart_entry:
+        lines.append("X-GNOME-Autostart-enabled=true")
+    return "\n".join(lines) + "\n"
+
+
 def enable_autostart(start_minimized: bool = True) -> Tuple[bool, str]:
-    """Registers Startup Terminal to launch automatically on Windows login."""
+    """Registers Startup Terminal to launch automatically on system login."""
     if sys.platform != "win32" or winreg is None:
-        return False, "Autostart registry is only supported on Windows."
+        try:
+            autostart_dir = os.path.expanduser("~/.config/autostart")
+            os.makedirs(autostart_dir, exist_ok=True)
+            path = os.path.join(autostart_dir, "startup-terminal.desktop")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(_linux_desktop_entry("--startup" if start_minimized else "", autostart_entry=True))
+            os.chmod(path, 0o755)
+            return True, "Autostart enabled on Linux login."
+        except Exception as exc:
+            return False, f"Failed to create Linux autostart entry: {exc}"
     cmd = get_target_command_string(start_minimized=start_minimized)
     try:
         with winreg.OpenKey(
@@ -131,8 +167,14 @@ def enable_autostart(start_minimized: bool = True) -> Tuple[bool, str]:
 
 
 def disable_autostart() -> Tuple[bool, str]:
-    """Removes Startup Terminal from Windows Startup."""
+    """Removes Startup Terminal from system login startup."""
     if sys.platform != "win32" or winreg is None:
+        path = os.path.expanduser("~/.config/autostart/startup-terminal.desktop")
+        if os.path.isfile(path):
+            try:
+                os.remove(path)
+            except OSError as exc:
+                return False, f"Failed to remove Linux autostart entry: {exc}"
         return True, "Autostart disabled."
     try:
         with winreg.OpenKey(
@@ -192,9 +234,24 @@ def remove_start_menu_shortcut(desktop: bool = False) -> bool:
 
 
 def install_start_menu_shortcut(desktop: bool = False) -> Tuple[bool, str]:
-    """Creates a Start Menu (and optionally Desktop) shortcut using native Windows COM IShellLinkW."""
+    """Creates a Start Menu / XDG Applications (and optionally Desktop) shortcut."""
     if sys.platform != "win32":
-        return False, "Shortcuts are currently Windows-only."
+        try:
+            menu_path = get_start_menu_shortcut_path()
+            os.makedirs(os.path.dirname(menu_path), exist_ok=True)
+            entry = _linux_desktop_entry()
+            with open(menu_path, "w", encoding="utf-8") as f:
+                f.write(entry)
+            os.chmod(menu_path, 0o755)
+            if desktop:
+                dt_path = get_desktop_shortcut_path()
+                if os.path.isdir(os.path.dirname(dt_path)):
+                    with open(dt_path, "w", encoding="utf-8") as f:
+                        f.write(entry)
+                    os.chmod(dt_path, 0o755)
+            return True, "Linux application desktop entry created successfully."
+        except Exception as exc:
+            return False, str(exc)
 
     import ctypes
     from ctypes import wintypes
